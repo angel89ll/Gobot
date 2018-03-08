@@ -7,11 +7,17 @@ import (
 	"golang.org/x/net/html"
 	"path/filepath"
 	"bufio"
+    "gopkg.in/mgo.v2"
+    //"gopkg.in/mgo.v2/bson"
 )
+
+type Link struct {
+	HyperLink string `json:"link"`
+}
 
 
 //Extract useful data from a link
-func extractType1Data(pUrl string, pChFinish chan bool) {
+func extractType1Data(pUrl string, pChFinish chan bool, pSession *mgo.Session) {
 	resp, error := http.Get(pUrl)
 
 	defer func() {
@@ -24,10 +30,17 @@ func extractType1Data(pUrl string, pChFinish chan bool) {
 		return
 	}
 
+	session := pSession.Copy();
+	defer session.Close()
+
+	col := session.DB("GobotDataBase").C("links")
+
 	body := resp.Body
 	defer body.Close() // Close body when function returns
 
 	tokenizer := html.NewTokenizer(body)
+
+	var isSearchedTag bool
 
 	for {
 		tItem := tokenizer.Next()
@@ -42,13 +55,31 @@ func extractType1Data(pUrl string, pChFinish chan bool) {
 			//TODO: Crear funcion para obtener los atributos del tag que contenga la info.
 			//TODO: Una vez obtenida la info, almacenarla en bbdd 
 			token := tokenizer.Token()
-			isSearchedTag := token.Data == "h4"
+			isSearchedTag = token.Data == "h4"
 			if isSearchedTag {
-				fmt.Println("We found a h4!!!!!")
+				fmt.Println("We found a h4!!!!!")	
+			}
+		case tItem == html.TextToken:
+			if isSearchedTag {
+				err := col.Insert(&Link{HyperLink: string(tokenizer.Text())})
+				if err != nil {
+					fmt.Println("Errorrr")
+				}
+				isSearchedTag = false	
 			}
 		}
 	}
 }
+
+func getTextFromToken(t html.Token) (href string) {
+	for _, a := range t.Attr {
+		if a.Key == "text" {
+			href = a.Val
+		}
+	}
+	return
+}
+
 
 func main() {
 
@@ -63,6 +94,12 @@ func main() {
 	}
 	defer file.Close()
 
+	session, error := mgo.Dial("localhost")
+	if error != nil {
+		panic(error)
+	}
+	defer session.Close()
+
 	channelFinishedGoroutine := make(chan bool)
 
 	fileScanner := bufio.NewScanner(file)
@@ -76,7 +113,7 @@ func main() {
 				numberGoroutines = numberGoroutines - 1
 			}
 		}
-		go extractType1Data(url, channelFinishedGoroutine)
+		go extractType1Data(url, channelFinishedGoroutine, session)
 		numberGoroutines = numberGoroutines + 1
 	}
 
